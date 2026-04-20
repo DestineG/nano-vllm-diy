@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from src.utils.math import divide
-from src.utils.context import get_context
+from src.utils.context import Context
     
 class VocabParallelEmbedding(nn.Module):
 
@@ -57,10 +57,9 @@ class ParallelLMHead(VocabParallelEmbedding):
     ):
         super().__init__(num_embeddings, embedding_dim, tp)
 
-    def forward(self, x: torch.Tensor):
-        context = get_context()
-        if context.is_prefill:
-            last_indices = context.cu_seqlens_q[1:] - 1
+    def forward(self, x: torch.Tensor, ctx: Context) -> torch.Tensor:
+        if ctx.is_prefill:
+            last_indices = ctx.cu_seqlens_q[1:] - 1
             x = x[last_indices].contiguous()
         logits = F.linear(x, self.weight)
         if self.tp_world_size > 1:
