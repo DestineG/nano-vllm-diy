@@ -16,26 +16,23 @@ def main():
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
     llm = LLM(path, Qwen3ForCausalLM)
 
+    messages = [
+        {"role": "system", "content": "You are a precise logical reasoning assistant."},
+        {"role": "user", "content": "If you are digging a hole that is 2 meters deep, 3 meters wide, and 4 meters long, how much dirt is left inside the hole?"}
+    ]
+    prompt = llm.tokenizer.apply_chat_template(
+        messages, 
+        tokenize=False, 
+        add_generation_prompt=True
+    )
+    print(prompt)
+    print(llm.generate([prompt], SamplingParams(temperature=0.2, max_tokens=512)))
+
+
     prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len))] for _ in range(num_seqs)]
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]
     # uncomment the following line for vllm
     # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
-
-    prompt = """<|im_start|>user
-    What does this Python function do and what is the output of `func([1, 2, 3, 2, 1])`?
-    ```python
-    def func(x):
-        return x == x[::-1]
-    ```<|im_end|>
-    <|im_start|>assistant
-    <think>
-    """
-    print(
-        llm.generate(
-            [prompt],
-            SamplingParams(temperature=0.2, max_tokens=512),
-        )
-    )
     # t = time.time()
     # llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
     # t = (time.time() - t)
