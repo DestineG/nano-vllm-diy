@@ -21,7 +21,21 @@ def main():
     # uncomment the following line for vllm
     # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
 
-    print(llm.generate(["Sally has 3 brothers. Each of her brothers has 2 sisters. How many sisters does Sally have?"], SamplingParams()))
+    prompt = """<|im_start|>user
+    What does this Python function do and what is the output of `func([1, 2, 3, 2, 1])`?
+    ```python
+    def func(x):
+        return x == x[::-1]
+    ```<|im_end|>
+    <|im_start|>assistant
+    <think>
+    """
+    print(
+        llm.generate(
+            [prompt],
+            SamplingParams(temperature=0.2, max_tokens=512),
+        )
+    )
     # t = time.time()
     # llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
     # t = (time.time() - t)

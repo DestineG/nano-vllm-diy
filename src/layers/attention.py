@@ -24,9 +24,10 @@ def store_kvcache_kernel(
     cache_offsets = slot_id * D + tl.arange(0, D)
 
     # 获取当前线程负责处理的 key/value
-    offsets = idx * key_stride + tl.arange(0, D)
-    key = tl.load(key_ptr + offsets)
-    value = tl.load(value_ptr + offsets)
+    key_offsets = idx * key_stride + tl.arange(0, D)
+    value_offsets = idx * value_stride + tl.arange(0, D)
+    key = tl.load(key_ptr + key_offsets)
+    value = tl.load(value_ptr + value_offsets)
 
     # 将 key/value 存储到对应的 KV cache 插槽中
     tl.store(k_cache_ptr + cache_offsets, key)
@@ -96,7 +97,7 @@ class Attention(nn.Module):
                 max_seqlen_k=ctx.max_seqlen_k,
                 softmax_scale=self.scale,
                 causal=True,
-                block_table=None
+                block_table=ctx.block_tables
             )
         else:
             # q: (num_seq, num_heads, head_dim) -> (num_seq, 1, num_heads, head_dim)
