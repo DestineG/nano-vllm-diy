@@ -84,7 +84,7 @@ class Scheduler:
             seq.append(token_id)
 
             if is_prefill:
-                assert seq.num_cached_tokens == seq.num_tokens - 1, f"All context tokens should be cached after prefill, but got {seq.num_cached_tokens} cached tokens and {context_len} context tokens"
+                assert seq.num_cached_tokens == seq.num_tokens - 1, f"All context tokens should be cached after prefill, but got {seq.num_cached_tokens} cached tokens and {seq.num_tokens - 1} context tokens"
                 seq.status = SequenceStatus.DECODE
                 self.decode.append(seq)
 
