@@ -87,11 +87,12 @@ class BlockManager:
     def compute_nums_prefix_cache_token(self, seq: Sequence):
         '''计算 seq 的前缀中有多少个 token 是在 block cache 中的'''
         nums_prefix_cache_token = 0
+        h = -1
         for i in range(seq.num_blocks):
             token_ids = seq.block(i)
             if len(token_ids) < self.block_size:
                 break
-            h = self.compute_hash(token_ids)
+            h = self.compute_hash(token_ids, h)
             block_id = self.hash_to_block_id.get(h, -1)
             if (block_id == -1                                      # hash 不存在
                 or not self.blocks[block_id].cached                 # cache 未填充
