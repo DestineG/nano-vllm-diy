@@ -30,14 +30,23 @@ class RoPE(nn.Module):
     @torch.compile
     def forward(
         self,
-        x: torch.Tensor,
+        q: torch.Tensor,
+        k: torch.Tensor,
         positions: torch.Tensor
-    ) -> torch.Tensor:
-        # x: (batch_seq_len, num_heads, head_dim); positions: (batch_seq_len, )
-        # cos_sin: (max_seq_len, 1, head_dim) -> (batch_seq_len, 1, head_dim)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # q, k: (batch_seq_len, num_heads/num_kv_heads, head_dim)
+        # positions: (batch_seq_len, )
+        
         cos_sin = self.cos_sin[positions]
-        x1, x2 = torch.chunk(x.float(), 2, dim=-1)
         cos, sin = cos_sin.chunk(2, dim=-1)
-        x1_rotated = x1 * cos - x2 * sin
-        x2_rotated = x1 * sin + x2 * cos
-        return torch.cat((x1_rotated, x2_rotated), dim=-1).to(x.dtype)
+
+        def rotate_tensor(t):
+            # 转换为 float32 保证计算精度
+            t1, t2 = torch.chunk(t.float(), 2, dim=-1)
+            t1_rotated = t1 * cos - t2 * sin
+            t2_rotated = t1 * sin + t2 * cos
+            return torch.cat((t1_rotated, t2_rotated), dim=-1).to(t.dtype)
+
+        q_rotated = rotate_tensor(q)
+        k_rotated = rotate_tensor(k)
+        return q_rotated, k_rotated

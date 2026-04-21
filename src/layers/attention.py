@@ -19,6 +19,9 @@ def store_kvcache_kernel(
     D: tl.constexpr
 ):
     idx = tl.program_id(0)
+    slot_id = tl.load(slot_mapping_ptr + idx)
+    if slot_id == -1: return
+    cache_offsets = slot_id * D + tl.arange(0, D)
 
     # 获取当前线程负责处理的 key/value
     offsets = idx * key_stride + tl.arange(0, D)
@@ -26,8 +29,6 @@ def store_kvcache_kernel(
     value = tl.load(value_ptr + offsets)
 
     # 将 key/value 存储到对应的 KV cache 插槽中
-    slot_id = tl.load(slot_mapping_ptr + idx)
-    cache_offsets = slot_id * D + tl.arange(0, D)
     tl.store(k_cache_ptr + cache_offsets, key)
     tl.store(v_cache_ptr + cache_offsets, value)
 
@@ -54,7 +55,7 @@ def store_kvcache(
     assert slot_mapping.numel() == batch_seq_len
 
     # 插槽 ID 检查，确保所有 slot_id 都在合法范围内
-    assert slot_mapping.min() >= 0 and slot_mapping.max() < k_cache.shape[0]
+    # assert slot_mapping.min() >= 0 and slot_mapping.max() < k_cache.shape[0]
 
     store_kvcache_kernel[(batch_seq_len,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
 
@@ -82,7 +83,8 @@ class Attention(nn.Module):
         ctx: Context
     ):
         k_cache, v_cache = self.k_cache, self.v_cache
-        store_kvcache(k, v, k_cache, v_cache, ctx.slot_mapping)
+        if k_cache.numel() and v_cache.numel():
+            store_kvcache(k, v, k_cache, v_cache, ctx.slot_mapping)
         # TODO: will support chunk prefill in the future
         if ctx.is_prefill:
             # q: (batch_seq_len, num_heads, head_dim)

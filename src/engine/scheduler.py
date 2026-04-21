@@ -10,8 +10,8 @@ class Scheduler:
         self.max_num_batched_tokens = config.max_num_batched_tokens
         self.eos = config.eos
         self.block_manager = BlockManager(
-            num_blocks=config.num_blocks,
-            block_size=config.block_size
+            num_blocks=config.num_kvcache_blocks,
+            block_size=config.kvcache_block_size
         )
         self.prefill: deque[Sequence] = deque()
         self.decode: deque[Sequence] = deque()
@@ -42,7 +42,8 @@ class Scheduler:
             # or 已经没有足够的 free block 来存储未 cache 的 token
             if num_uncached_tokens > remaining_tokens or not self.block_manager.can_allocate(seq):
                 break
-            self.block_manager.allocate(seq)
+            num_cache_hit = self.block_manager.allocate(seq)
+            assert num_cache_hit == num_prefix_cache_tokens, "Number of cache hit should match the number of prefix cache tokens"
             seq.num_scheduled_tokens = num_uncached_tokens
             num_batched_tokens += num_uncached_tokens
             scheduled_seqs.append(self.prefill.popleft())
@@ -83,11 +84,11 @@ class Scheduler:
             seq.append(token_id)
 
             if is_prefill:
-                assert seq.num_cached_tokens == seq.num_prompt_tokens, "After prefill, all prompt tokens should be cached"
+                assert seq.num_cached_tokens == seq.num_tokens - 1, f"All context tokens should be cached after prefill, but got {seq.num_cached_tokens} cached tokens and {context_len} context tokens"
                 seq.status = SequenceStatus.DECODE
                 self.decode.append(seq)
 
-            if (not seq.ignore_eos and token_id == self.eos) or seq.num_generated_tokens == seq.max_tokens:
+            if (not seq.ignore_eos and token_id == self.eos) or seq.num_generated_token_ids == seq.max_tokens:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.decode.remove(seq)

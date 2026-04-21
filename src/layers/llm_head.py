@@ -41,7 +41,7 @@ class VocabParallelEmbedding(nn.Module):
             # 将非法位置的 token_id 设置为 0
             masked_x = mask * (x - self.vocab_start_idx)
         # (batch_seq_len, ) -> (batch_seq_len, embedding_dim)
-        y = F.embedding(masked_x, self.weight)
+        y = F.embedding(masked_x if self.tp_world_size > 1 else x, self.weight)
         if self.tp_world_size > 1:
             # 将非法位置的词向量设置为 0，避免污染非法位置的词向量
             y_mask = mask.unsqueeze(1) * y

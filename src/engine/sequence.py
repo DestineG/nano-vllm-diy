@@ -25,6 +25,7 @@ class Sequence:
 
         self.seq_id = next(self._id_counter)
         self.status = SequenceStatus.PREFILL
+        self.last_token_id = self.token_ids[-1]
 
         self.num_tokens = len(self.token_ids)
         self.num_prompt_tokens = len(token_ids)
@@ -45,9 +46,12 @@ class Sequence:
         return self.status == SequenceStatus.FINISHED
 
     @property
-    def num_generated_tokens(self):
+    def num_generated_token_ids(self):
         return self.num_tokens - self.num_prompt_tokens
-    
+    @property
+    def generated_token_ids(self):
+        return self.token_ids[self.num_prompt_tokens:]
+
     @property
     def num_blocks(self):
         return (len(self.token_ids) + self.block_size - 1) // self.block_size

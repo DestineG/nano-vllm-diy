@@ -103,13 +103,15 @@ class BlockManager:
     def can_allocate(self, seq: Sequence):
         '''判断是否有足够的 free block 来分配给 seq'''
         assert not seq.block_table, "Sequence already has a block table"
-        num_cached = self.compute_nums_prefix_cache_token(seq) * seq.block_size
-        num_required_new_blocks = seq.num_blocks - num_cached
+        num_cached_tokens = self.compute_nums_prefix_cache_token(seq)
+        num_cached_blocks = num_cached_tokens // self.block_size
+        num_required_new_blocks = seq.num_blocks - num_cached_blocks
         return len(self.free_block_ids) >= num_required_new_blocks
 
     def allocate(self, seq: Sequence):
         assert not seq.block_table, "Sequence already has a block table"
         h = -1
+        num_cache_hit = 0
         cache_miss = False
         for i in range(seq.num_blocks):
             token_ids = seq.block(i)
@@ -130,6 +132,7 @@ class BlockManager:
                     self.hash_to_block_id[h] = block_id
             # 完整 block
             else:
+                num_cache_hit += self.block_size
                 seq.num_cached_tokens += Sequence.block_size
                 block = self.blocks[block_id]
                 block.add_ref()
@@ -137,6 +140,7 @@ class BlockManager:
                     self.free_block_ids.remove(block_id)
                     self.used_block_ids.add(block_id)
             seq.block_table.append(block_id)
+        return num_cache_hit
     
     def deallocate(self, seq: Sequence):
         assert seq.block_table, "Sequence does not have a block table"
@@ -155,7 +159,7 @@ class BlockManager:
         2. len(seq) % block_size == 0: 需要更新最后一个 block 的状态(hash 和 token_ids)
         3. 其他情况: 不需要分配新的 block, 也不需要更新 block 的状态
         '''
-        assert seq.has_block(), "Sequence does not have a block table"
+        assert seq.block_table, "Sequence does not have a block table"
         block_table = seq.block_table
         last_block = self.blocks[block_table[-1]]
         # 仅做 block 的分配
