@@ -4,8 +4,11 @@ from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
+import torch
 
-from src.config.config import Config
+from src.config.runner_config import RunnerConfig
+from src.config.model_config import get_model_config
+from src.config.scheduler_cfg import SchedulerConfig
 from src.config.sampling_params import SamplingParams
 from src.engine.sequence import Sequence
 from src.engine.scheduler import Scheduler
@@ -14,24 +17,44 @@ from src.engine.model_runner import ModelRunner
 
 class LLMEngine:
 
-    def __init__(self, model, **kwargs):
-        config_fields = {field.name for field in fields(Config)}
-        config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
-        config = Config(model, **config_kwargs)
-        Sequence.block_size = config.kvcache_block_size
+    def __init__(self, model_name_or_path, modelClass):
+        runner_config = RunnerConfig(model_path=model_name_or_path)
+        model_config = get_model_config(model_name_or_path)
+        
+        dtype = model_config.dtype if hasattr(model_config, "dtype") else torch.float16
+        max_seq_len = min(model_config.max_position_embeddings, runner_config.max_seq_len)
+        num_key_value_heads = model_config.num_key_value_heads
+        head_dim = model_config.head_dim if hasattr(model_config, "head_dim") else model_config.hidden_size // model_config.num_key_value_heads
+        num_hidden_layers = model_config.num_hidden_layers
+        model_dim = model_config.hidden_size
+        
+        runner_config.dtype = dtype
+        runner_config.max_seq_len = max_seq_len
+        runner_config.num_key_value_heads = num_key_value_heads
+        runner_config.head_dim = head_dim
+        runner_config.num_hidden_layers = num_hidden_layers
+        runner_config.model_dim = model_dim
+
+        Sequence.block_size = runner_config.kvcache_block_size
         self.ps = []
         self.events = []
         ctx = mp.get_context("spawn")
-        for i in range(1, config.tensor_parallel_size):
+        for i in range(1, runner_config.tensor_parallel_size):
             event = ctx.Event()
-            process = ctx.Process(target=ModelRunner, args=(config, i, event))
+            process = ctx.Process(target=ModelRunner, args=(i, event, modelClass, runner_config, model_config))
             process.start()
             self.ps.append(process)
             self.events.append(event)
-        self.model_runner = ModelRunner(config, 0, self.events)
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
-        config.eos = self.tokenizer.eos_token_id
-        self.scheduler = Scheduler(config)
+        self.model_runner = ModelRunner(0, self.events, modelClass, runner_config, model_config)
+        self.tokenizer = AutoTokenizer.from_pretrained(runner_config.model_path, use_fast=True)
+        scheduler_config = SchedulerConfig(
+            max_num_seqs=runner_config.max_num_seqs,
+            max_num_batched_tokens=runner_config.max_batched_seq_len,
+            eos=self.tokenizer.eos_token_id,
+            num_kvcache_blocks=self.model_runner.num_kvcache_blocks,
+            kvcache_block_size=runner_config.kvcache_block_size,
+        )
+        self.scheduler = Scheduler(scheduler_config)
         atexit.register(self.exit)
 
     def exit(self):

@@ -2,6 +2,7 @@ import os
 import time
 from random import randint, seed
 from src.engine.llm_engine import LLMEngine as LLM
+from src.models.qwen3 import Qwen3ForCausalLM
 from src.config.sampling_params import SamplingParams
 # from vllm import LLM, SamplingParams
 
@@ -13,7 +14,7 @@ def main():
     max_ouput_len = 1024
 
     path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
-    llm = LLM(path, enforce_eager=False, max_model_len=4096)
+    llm = LLM(path, Qwen3ForCausalLM)
 
     prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len))] for _ in range(num_seqs)]
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]

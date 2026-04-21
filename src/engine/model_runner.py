@@ -3,38 +3,59 @@ import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+from transformers import AutoConfig
 
-from src.config.config import Config
 from src.engine.sequence import Sequence
-from src.models.qwen3 import Qwen3ForCausalLM
 from src.layers.sampler import Sampler
 from src.utils.context import Context
-from src.utils.loader import load_model
+from src.config.runner_config import RunnerConfig
 
 
 class ModelRunner:
 
-    def __init__(self, config: Config, rank: int, event: Event | list[Event]):
-        self.config = config
-        hf_config = config.hf_config
-        self.block_size = config.kvcache_block_size
-        self.enforce_eager = config.enforce_eager
-        self.world_size = config.tensor_parallel_size
+    def __init__(
+        self,
+        rank: int,
+        event: Event | list[Event],
+        modelClass = None,
+        runner_cfg: RunnerConfig = None,
+        model_cfg: AutoConfig = None,
+    ):
+        self.block_size = runner_cfg.kvcache_block_size
+        self.enforce_eager = runner_cfg.enforce_eager
+        self.world_size = runner_cfg.tensor_parallel_size
         self.rank = rank
         self.event = event
 
         dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
         torch.cuda.set_device(rank)
         default_dtype = torch.get_default_dtype()
-        torch.set_default_dtype(hf_config.dtype)
+        torch.set_default_dtype(runner_cfg.dtype)
         torch.set_default_device("cuda")
-        self.model = Qwen3ForCausalLM(hf_config)
-        load_model(self.model, config.model)
+        self.model = modelClass(model_cfg)
+        self.model.load(runner_cfg.model_path)
         self.sampler = Sampler()
-        self.warmup_model()
-        self.allocate_kv_cache()
+        self.warmup_model(
+            max_batched_seq_len=runner_cfg.max_batched_seq_len,
+            max_seq_len=min(runner_cfg.max_seq_len, runner_cfg.max_seq_len),
+            max_num_seqs=runner_cfg.max_num_seqs
+        )
+        self.num_kvcache_blocks = self.allocate_kv_cache(
+            gpu_memory_utilization=runner_cfg.gpu_memory_utilization,
+            num_kvcache_blocks=runner_cfg.num_kvcache_blocks,
+            kvcache_block_size=runner_cfg.kvcache_block_size,
+            num_key_value_heads=runner_cfg.num_key_value_heads,
+            head_dim=runner_cfg.head_dim,
+            num_hidden_layers=runner_cfg.num_hidden_layers,
+            dtype=runner_cfg.dtype,
+            tp_world_size=self.world_size,
+        )
         if not self.enforce_eager:
-            self.capture_cudagraph()
+            self.capture_cudagraph(
+                max_num_seqs=runner_cfg.max_num_seqs,
+                max_seq_len=runner_cfg.max_seq_len,
+                model_dim=runner_cfg.model_dim,
+            )
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -88,37 +109,51 @@ class ModelRunner:
         method = getattr(self, method_name, None)
         return method(*args)
 
-    def warmup_model(self):
+    def warmup_model(
+        self,
+        max_batched_seq_len: int=4096 * 4,
+        max_seq_len: int=4096,
+        max_num_seqs: int=512
+    ):
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
-        max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
-        seq_len = min(max_num_batched_tokens, max_model_len)
-        num_seqs = min(max_num_batched_tokens // seq_len, self.config.max_num_seqs)
+        seq_len = min(max_batched_seq_len, max_seq_len)
+        num_seqs = min(max_batched_seq_len // seq_len, max_num_seqs)
         seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
         for seq in seqs:
             seq.num_scheduled_tokens = seq_len
         self.run(seqs, True)
         torch.cuda.empty_cache()
 
-    def allocate_kv_cache(self):
-        config = self.config
-        hf_config = config.hf_config
+    def allocate_kv_cache(
+        self,
+        gpu_memory_utilization: float = 0.9,
+        num_kvcache_blocks: int | None = None,
+        kvcache_block_size: int = 512,
+        num_key_value_heads: int | None = None,
+        head_dim: int | None = None,
+        num_hidden_layers: int | None = None,
+        dtype: torch.dtype = torch.float16,
+        tp_world_size: int | None = None,
+    ):
         free, total = torch.cuda.mem_get_info()
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
-        num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
-        config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
-        assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+        local_num_kv_heads = num_key_value_heads // tp_world_size
+        block_bytes = 2 * num_hidden_layers * kvcache_block_size * local_num_kv_heads * head_dim * dtype.itemsize
+        max_num_kvcache_blocks = int(total * gpu_memory_utilization - used - peak + current) // block_bytes
+        if num_kvcache_blocks is None or num_kvcache_blocks <= 0:
+            num_kvcache_blocks = max_num_kvcache_blocks
+        assert max_num_kvcache_blocks >= num_kvcache_blocks, f"Not enough GPU memory to allocate kv cache, required {num_kvcache_blocks * block_bytes / 2**30:.2f} GB but only {max_num_kvcache_blocks * block_bytes / 2**30:.2f} GB is available"
+        kv_cache = torch.empty(2, num_hidden_layers, num_kvcache_blocks, kvcache_block_size, local_num_kv_heads, head_dim)
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
-                module.k_cache = self.kv_cache[0, layer_id]
-                module.v_cache = self.kv_cache[1, layer_id]
+                module.k_cache = kv_cache[0, layer_id]
+                module.v_cache = kv_cache[1, layer_id]
                 layer_id += 1
+        return num_kvcache_blocks
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
@@ -232,17 +267,20 @@ class ModelRunner:
         return token_ids
 
     @torch.inference_mode()
-    def capture_cudagraph(self):
-        config = self.config
-        hf_config = config.hf_config
-        max_bs = min(self.config.max_num_seqs, 512)
-        max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
+    def capture_cudagraph(
+        self,
+        max_num_seqs: int=512,
+        max_seq_len: int=4096,
+        model_dim: int=2048,
+    ):
+        max_bs = min(max_num_seqs, 512)
+        max_num_blocks = (max_seq_len + self.block_size - 1) // self.block_size
         input_ids = torch.zeros(max_bs, dtype=torch.int64)
         positions = torch.zeros(max_bs, dtype=torch.int64)
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
-        outputs = torch.zeros(max_bs, hf_config.hidden_size)
+        outputs = torch.zeros(max_bs, model_dim)
         self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
         self.graphs = {}
         self.graph_pool = None
