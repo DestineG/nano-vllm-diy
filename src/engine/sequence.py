@@ -62,7 +62,7 @@ class Sequence:
         self.num_tokens += 1
 
     def block(self, block_idx):
-        assert block_idx < self.num_blocks
+        assert block_idx < self.num_blocks, f"block_idx {block_idx} out of range for sequence with {self.num_blocks} blocks"
         start_idx = block_idx * self.block_size
         end_idx = min(start_idx + self.block_size, len(self.token_ids))
         return self.token_ids[start_idx:end_idx]

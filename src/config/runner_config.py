@@ -8,6 +8,7 @@ class RunnerConfig:
 
     max_batched_seq_len: int = 16384
     max_num_seqs: int = 512
+    chunked_prefill_size: int = 512
 
     tensor_parallel_size: int = 1
     enforce_eager: bool = False

@@ -1,3 +1,1 @@
-- chunk prefill
-- Continuous Batching
-- 目前 prefill 已经支持 prefixcache，将 decode 看作是一个特殊的 prefixcache 直接将 decode 和 prefill 进行合并
+- Continuous Batching(将 decode 看作是一个特殊的 prefixcache 直接将 decode 和 prefill 进行合并)

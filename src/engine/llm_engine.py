@@ -54,6 +54,7 @@ class LLMEngine:
             eos=self.tokenizer.eos_token_id,
             num_kvcache_blocks=self.model_runner.num_kvcache_blocks,
             kvcache_block_size=runner_config.kvcache_block_size,
+            chunked_prefill_size=runner_config.chunked_prefill_size
         )
         self.scheduler = Scheduler(scheduler_config)
         atexit.register(self.exit)

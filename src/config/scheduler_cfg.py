@@ -8,3 +8,4 @@ class SchedulerConfig:
     eos: int
     num_kvcache_blocks: int
     kvcache_block_size: int
+    chunked_prefill_size: int

@@ -3,7 +3,7 @@ import xxhash
 import numpy as np
 
 from src.engine.sequence import Sequence
-from src.utils.log import add_hit
+from src.utils.log import log_count
 
 class Block:
     def __init__(self, block_id: int):
@@ -55,7 +55,10 @@ class BlockManager:
         self.hash_to_block_id = {}
         self.free_block_ids = deque(range(num_blocks))
         self.used_block_ids = set()
-    
+
+    def get_num_free_block(self):
+        return len(self.free_block_ids)
+
     def compute_hash(
         self,
         token_ids: list[int],
@@ -74,8 +77,7 @@ class BlockManager:
             # 注意：只有当 hash 指向的确实是当前 block 时才删除
             if self.hash_to_block_id[block.hash] == block_id:
                 del self.hash_to_block_id[block.hash]
-                
-        block.reset() # 只有在这里才真正清空
+        block.reset()
         block.add_ref()
         self.free_block_ids.remove(block_id)
         self.used_block_ids.add(block_id)
@@ -86,69 +88,92 @@ class BlockManager:
         assert block.ref_count > 0, "Block is already free"
         block.remove_ref()
         if block.ref_count == 0:
-            # block.reset()
             self.free_block_ids.append(block_id)
             self.used_block_ids.remove(block_id)
 
-    def compute_nums_prefix_cache_token(self, seq: Sequence):
-        '''计算 seq 的前缀中有多少个 token 是在 block cache 中的'''
-        nums_prefix_cache_token = 0
-        h = -1
-        for i in range(seq.num_blocks):
+    def compute_num_prefix_cache_block(self, seq: Sequence):
+        """
+        计算该序列在当前全局 Block Cache 下理论上能命中的前缀块数量
+
+        注意：
+        1. 该函数本身是只读的，不会修改 seq 状态或任何全局引用计数
+        2. 它不依赖 block_table 的当前长度，仅基于 token_ids 的 Hash 进行匹配
+        3. 返回一个元组 (total_hits, update_fn)。调用 update_fn() 才会真正应用物理块的替换/追加
+        """
+        start_block = seq.num_cached_tokens // self.block_size
+
+        if start_block > 0:
+            assert start_block <= len(seq.block_table), "Start block should not exceed current block table length"
+            h = self.blocks[seq.block_table[start_block - 1]].hash
+        else:
+            h = -1
+        new_hitted_ids = []
+        for i in range(start_block, seq.num_blocks):
             token_ids = seq.block(i)
-            if len(token_ids) < self.block_size:
-                break
+            if len(token_ids) < self.block_size: break
+            
             h = self.compute_hash(token_ids, h)
             block_id = self.hash_to_block_id.get(h, -1)
-            if (block_id == -1                                      # hash 不存在
-                or not self.blocks[block_id].cached                 # cache 未填充
-                or self.blocks[block_id].token_ids != token_ids):   # token_ids 不匹配
+
+            if (block_id == -1
+                or not self.blocks[block_id].cached 
+                or self.blocks[block_id].token_ids != token_ids):
                 break
-            nums_prefix_cache_token += self.block_size
-        return nums_prefix_cache_token
+            new_hitted_ids.append(block_id)
 
-    def can_allocate(self, seq: Sequence):
-        '''判断是否有足够的 free block 来分配给 seq'''
-        assert not seq.block_table, "Sequence already has a block table"
-        num_cached_tokens = self.compute_nums_prefix_cache_token(seq)
-        num_cached_blocks = num_cached_tokens // self.block_size
-        num_required_new_blocks = seq.num_blocks - num_cached_blocks
-        return len(self.free_block_ids) >= num_required_new_blocks
+        total_hits = start_block + len(new_hitted_ids)
+        log_count(prefix_cache=len(new_hitted_ids))
 
-    def allocate(self, seq: Sequence):
-        assert not seq.block_table, "Sequence already has a block table"
-        h = -1
-        num_cache_hit = 0
-        cache_miss = False
-        for i in range(seq.num_blocks):
-            token_ids = seq.block(i)
-            # 只在完整 block 上计算 hash
-            h = self.compute_hash(token_ids, h) if len(token_ids) == self.block_size else -1
-            block_id = self.hash_to_block_id.get(h, -1)
-            if (not cache_miss                                              # cache 未命中
-                and (block_id == -1                                         # hash 不存在
-                     or not self.blocks[block_id].cached                    # cache 未填充
-                     or self.blocks[block_id].token_ids != token_ids)):     # token_ids 不匹配
-                cache_miss = True
-            # 非完整 block / 完整 block
-            if cache_miss:
-                block_id = self.free_block_ids[0]
-                block = self._allocate_block(block_id)
-                block.update(h, token_ids, cached=False)
-                if h != -1:
-                    self.hash_to_block_id[h] = block_id
-            # 完整 block
-            else:
-                add_hit()
-                num_cache_hit += self.block_size
-                seq.num_cached_tokens += Sequence.block_size
-                block = self.blocks[block_id]
-                block.add_ref()
-                if block_id in self.free_block_ids:
-                    self.free_block_ids.remove(block_id)
-                    self.used_block_ids.add(block_id)
+        def update_prefix_cache_block(allow_append=False):
+            for idx, new_id in enumerate(new_hitted_ids):
+                table_idx = start_block + idx
+                
+                if table_idx < len(seq.block_table):
+                    old_id = seq.block_table[table_idx]
+                    if old_id != new_id:
+                        self._free_block(old_id)
+                        self.blocks[new_id].add_ref()
+                        seq.block_table[table_idx] = new_id
+                        if new_id in self.free_block_ids:
+                            self.free_block_ids.remove(new_id)
+                            self.used_block_ids.add(new_id)
+                elif allow_append:
+                    self.blocks[new_id].add_ref()
+                    seq.block_table.append(new_id)
+                    if new_id in self.free_block_ids:
+                        self.free_block_ids.remove(new_id)
+                        self.used_block_ids.add(new_id)
+                else:
+                    raise ValueError("Cannot append hit block without allow_append=True")
+            seq.num_cached_tokens = total_hits * self.block_size
+
+        return total_hits, update_prefix_cache_block
+
+    def allocate(self, seq: Sequence, num_to_allocate: int):
+        """
+        仅负责从 free_block_ids 中划拨指定数量的 block 并初始化
+
+        调用者需确保 num_to_allocate 是排除 Cache Hit 后的净需求
+        """
+        assert num_to_allocate <= len(self.free_block_ids), "Not enough free blocks"
+
+        h = -1 if not seq.block_table else self.blocks[seq.block_table[-1]].hash
+        for _ in range(num_to_allocate):
+            token_ids = seq.block(len(seq.block_table))
+            
+            # hash 计算
+            is_full = len(token_ids) == self.block_size
+            h = self.compute_hash(token_ids, h) if is_full else -1
+
+            # block 分配与初始化
+            block_id = self.free_block_ids[0]
+            block = self._allocate_block(block_id)
+            block.update(h, token_ids, cached=False)
+
+            if h != -1:
+                self.hash_to_block_id[h] = block_id
             seq.block_table.append(block_id)
-        return num_cache_hit
+        return True
     
     def deallocate(self, seq: Sequence):
         assert seq.block_table, "Sequence does not have a block table"
