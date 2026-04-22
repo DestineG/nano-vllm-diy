@@ -1,1 +1,2 @@
-- Continuous Batching(将 decode 看作是一个特殊的 prefixcache 直接将 decode 和 prefill 进行合并)
+- 在线 Continuous Batching
+- prefill/decode 的公平策略

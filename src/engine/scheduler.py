@@ -33,10 +33,26 @@ class Scheduler:
     
     def schedule(self):
         scheduled_seqs = []
-        num_batched_tokens = 0
+        prefill_num_batched_tokens = 0
+        decode_num_batched_tokens = 0
         max_num_chunk_prefill = 1
         num_chunk_prefill = 0
 
+        # decode
+        while self.decode and len(scheduled_seqs) < self.max_num_seqs:
+            seq = self.decode.popleft()
+            while not self.block_manager.can_append(seq):
+                if self.decode:
+                    self.back_to_prefill(self.decode.pop())
+                else:
+                    self.back_to_prefill(seq)
+                    break
+            else:
+                seq.num_scheduled_tokens = 1
+                self.block_manager.may_append(seq)
+                decode_num_batched_tokens += 1
+                scheduled_seqs.append(seq)
+        self.decode.extendleft(reversed(scheduled_seqs))
 
         # prefill: don't support chunk prefill for now
         while self.prefill and len(scheduled_seqs) < self.max_num_seqs:
@@ -47,7 +63,7 @@ class Scheduler:
             call_back(allow_append=True)    # 更新 seq 的 prefixcache 以及 blockmanager 的 used/free list
             num_free_block = self.block_manager.get_num_free_block()
 
-            remaining_tokens = self.max_num_batched_tokens - num_batched_tokens
+            remaining_tokens = self.max_num_batched_tokens - prefill_num_batched_tokens - decode_num_batched_tokens
             if remaining_tokens <= 0:
                 break
             max_num_available_token = len(seq) - seq.num_cached_tokens
@@ -81,30 +97,11 @@ class Scheduler:
                 self.block_manager.allocate(seq, min_num_need_block - len(seq.block_table))
 
             # 更新
-            num_batched_tokens += num_scheduled_tokens
+            prefill_num_batched_tokens += num_scheduled_tokens
             scheduled_seqs.append(self.prefill.popleft())
-        if scheduled_seqs:
-            return scheduled_seqs, num_batched_tokens
         
-        num_batched_tokens = 0
-
-        # decode
-        while self.decode and len(scheduled_seqs) < self.max_num_seqs:
-            seq = self.decode.popleft()
-            while not self.block_manager.can_append(seq):
-                if self.decode:
-                    self.back_to_prefill(self.decode.pop())
-                else:
-                    self.back_to_prefill(seq)
-                    break
-            else:
-                seq.num_scheduled_tokens = 1
-                self.block_manager.may_append(seq)
-                num_batched_tokens += 1
-                scheduled_seqs.append(seq)
-        assert scheduled_seqs, "At least one sequence should be scheduled in decode stage"
-        self.decode.extendleft(reversed(scheduled_seqs))
-        return scheduled_seqs, num_batched_tokens
+        assert scheduled_seqs, "At least one sequence should be scheduled in each step to make progress"
+        return scheduled_seqs, prefill_num_batched_tokens, decode_num_batched_tokens
 
     def postprocess(
         self,
