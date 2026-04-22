@@ -86,31 +86,20 @@ class Attention(nn.Module):
         k_cache, v_cache = self.k_cache, self.v_cache
         if k_cache.numel() and v_cache.numel():
             store_kvcache(k, v, k_cache, v_cache, ctx.slot_mapping)
-        # TODO: will support chunk prefill in the future
-        if ctx.is_prefill:
-            # q: (batch_seq_len, num_heads, head_dim)
-            # Use flash_attn_varlen_func for both paths:
-            # - no prefix cache: use per-token K/V (total_k, nheads_k, d), block_table=None
-            # - paged prefix cache: use KV cache tensors (num_blocks, block_size, nheads_k, d), block_table!=None
-            if ctx.block_tables is not None:
-                k, v = k_cache, v_cache
-            attn_output = flash_attn_varlen_func(
-                q, k, v,
-                cu_seqlens_q=ctx.cu_seqlens_q,
-                cu_seqlens_k=ctx.cu_seqlens_k,
-                max_seqlen_q=ctx.max_seqlen_q,
-                max_seqlen_k=ctx.max_seqlen_k,
-                softmax_scale=self.scale,
-                causal=True,
-                block_table=ctx.block_tables
-                )
-        else:
-            # q: (num_seq, num_heads, head_dim) -> (num_seq, 1, num_heads, head_dim)
-            attn_output = flash_attn_with_kvcache(
-                q.unsqueeze(1), k_cache, v_cache,
-                cache_seqlens=ctx.context_lens,
-                block_table=ctx.block_tables,
-                softmax_scale=self.scale,
-                causal=True
+        # q: (batch_seq_len, num_heads, head_dim)
+        # Use flash_attn_varlen_func for both paths:
+        # - no prefix cache: use per-token K/V (total_k, nheads_k, d), block_table=None
+        # - paged prefix cache: use KV cache tensors (num_blocks, block_size, nheads_k, d), block_table!=None
+        if ctx.block_tables is not None:
+            k, v = k_cache, v_cache
+        attn_output = flash_attn_varlen_func(
+            q, k, v,
+            cu_seqlens_q=ctx.cu_seqlens_q,
+            cu_seqlens_k=ctx.cu_seqlens_k,
+            max_seqlen_q=ctx.max_seqlen_q,
+            max_seqlen_k=ctx.max_seqlen_k,
+            softmax_scale=self.scale,
+            causal=True,
+            block_table=ctx.block_tables
             )
         return attn_output

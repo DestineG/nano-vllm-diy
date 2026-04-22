@@ -72,12 +72,11 @@ class LLMEngine:
         self.scheduler.add_sequence(seq)
 
     def step(self):
-        seqs, is_prefill = self.scheduler.schedule()
-        num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
-        token_ids = self.model_runner.call("run", seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        seqs, num_tokens = self.scheduler.schedule()
+        token_ids = self.model_runner.call("run", seqs)
+        self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.generated_token_ids) for seq in seqs if seq.is_finished]
-        return outputs, num_tokens
+        return outputs, num_tokens, not len(seqs) == num_tokens
 
     def is_finished(self):
         return self.scheduler.is_finished()
@@ -97,8 +96,8 @@ class LLMEngine:
         prefill_throughput = decode_throughput = 0.
         while not self.is_finished():
             t = perf_counter()
-            output, num_tokens = self.step()
-            if num_tokens > 0:
+            output, num_tokens, is_prefill = self.step()
+            if is_prefill:
                 prefill_throughput = num_tokens / (perf_counter() - t)
             else:
                 decode_throughput = -num_tokens / (perf_counter() - t)

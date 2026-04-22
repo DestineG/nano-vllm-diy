@@ -51,7 +51,8 @@ class Scheduler:
             if remaining_tokens <= 0:
                 break
             max_num_available_token = len(seq) - seq.num_cached_tokens
-            if max_num_available_token <= 0:    # 该序列的所有 token 都已缓存，直接进入 decode 阶段
+            if max_num_available_token <= 0:    # 该序列的所有 token 都已缓存，直接进入 decode 阶段，重算最后一个 token
+                seq.num_cached_tokens -= 1
                 self.prefill.popleft()
                 self.decode.append(seq)
                 continue
@@ -83,8 +84,10 @@ class Scheduler:
             num_batched_tokens += num_scheduled_tokens
             scheduled_seqs.append(self.prefill.popleft())
         if scheduled_seqs:
-            return scheduled_seqs, True
+            return scheduled_seqs, num_batched_tokens
         
+        num_batched_tokens = 0
+
         # decode
         while self.decode and len(scheduled_seqs) < self.max_num_seqs:
             seq = self.decode.popleft()
@@ -97,16 +100,16 @@ class Scheduler:
             else:
                 seq.num_scheduled_tokens = 1
                 self.block_manager.may_append(seq)
+                num_batched_tokens += 1
                 scheduled_seqs.append(seq)
         assert scheduled_seqs, "At least one sequence should be scheduled in decode stage"
         self.decode.extendleft(reversed(scheduled_seqs))
-        return scheduled_seqs, False
+        return scheduled_seqs, num_batched_tokens
 
     def postprocess(
         self,
         seqs: list[Sequence],
-        token_ids: list[int],
-        is_prefill: bool
+        token_ids: list[int]
     ):
         for seq, token_id in zip(seqs, token_ids):
             seq.num_cached_tokens += seq.num_scheduled_tokens
