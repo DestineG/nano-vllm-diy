@@ -1,2 +1,4 @@
 - 在线 Continuous Batching
 - prefill/decode 的公平策略
+- config 优化
+- 探究 graph replay 效率如此高的原因
