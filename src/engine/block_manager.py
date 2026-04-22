@@ -3,6 +3,7 @@ import xxhash
 import numpy as np
 
 from src.engine.sequence import Sequence
+from src.utils.log import add_hit
 
 class Block:
     def __init__(self, block_id: int):
@@ -68,8 +69,13 @@ class BlockManager:
     
     def _allocate_block(self, block_id: int):
         block = self.blocks[block_id]
-        assert block.ref_count == 0, "Block is not free"
-        block.reset()
+        # 如果这个块之前有旧的 hash，需要先从全局映射中移除旧的 mapping
+        if block.hash != -1 and block.hash in self.hash_to_block_id:
+            # 注意：只有当 hash 指向的确实是当前 block 时才删除
+            if self.hash_to_block_id[block.hash] == block_id:
+                del self.hash_to_block_id[block.hash]
+                
+        block.reset() # 只有在这里才真正清空
         block.add_ref()
         self.free_block_ids.remove(block_id)
         self.used_block_ids.add(block_id)
@@ -80,7 +86,7 @@ class BlockManager:
         assert block.ref_count > 0, "Block is already free"
         block.remove_ref()
         if block.ref_count == 0:
-            block.reset()
+            # block.reset()
             self.free_block_ids.append(block_id)
             self.used_block_ids.remove(block_id)
 
@@ -133,6 +139,7 @@ class BlockManager:
                     self.hash_to_block_id[h] = block_id
             # 完整 block
             else:
+                add_hit()
                 num_cache_hit += self.block_size
                 seq.num_cached_tokens += Sequence.block_size
                 block = self.blocks[block_id]
