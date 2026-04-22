@@ -1,5 +1,7 @@
 from collections import deque
 
+from setuptools import config
+
 from src.config.scheduler_cfg import SchedulerConfig
 from src.engine.sequence import Sequence, SequenceStatus
 from src.engine.block_manager import BlockManager
@@ -8,6 +10,7 @@ class Scheduler:
     def __init__(self, config: SchedulerConfig):
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
+        self.max_seq_len = config.max_seq_len
         self.eos = config.eos
         self.block_manager = BlockManager(
             num_blocks=config.num_kvcache_blocks,
@@ -31,6 +34,9 @@ class Scheduler:
     def schedule(self):
         scheduled_seqs = []
         num_batched_tokens = 0
+        max_num_chunk_prefill = 1
+        num_chunk_prefill = 0
+
 
         # prefill: don't support chunk prefill for now
         while self.prefill and len(scheduled_seqs) < self.max_num_seqs:
@@ -44,6 +50,9 @@ class Scheduler:
                 break
             num_cache_hit = self.block_manager.allocate(seq)
             assert num_cache_hit == num_prefix_cache_tokens, "Number of cache hit should match the number of prefix cache tokens"
+            if num_chunk_prefill <= max_num_chunk_prefill and num_uncached_tokens > self.max_seq_len:
+                num_uncached_tokens = self.max_seq_len
+                num_chunk_prefill += 1
             seq.num_scheduled_tokens = num_uncached_tokens
             num_batched_tokens += num_uncached_tokens
             scheduled_seqs.append(self.prefill.popleft())
@@ -83,8 +92,9 @@ class Scheduler:
             seq.num_scheduled_tokens = 0
             seq.append(token_id)
 
-            if is_prefill:
-                assert seq.num_cached_tokens == seq.num_tokens - 1, f"All context tokens should be cached after prefill, but got {seq.num_cached_tokens} cached tokens and {seq.num_tokens - 1} context tokens"
+            if (seq.status == SequenceStatus.PREFILL
+                and seq.num_cached_tokens == seq.num_tokens - 1
+            ):
                 seq.status = SequenceStatus.DECODE
                 self.decode.append(seq)
 

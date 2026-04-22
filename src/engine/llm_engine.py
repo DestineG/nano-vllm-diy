@@ -50,6 +50,7 @@ class LLMEngine:
         scheduler_config = SchedulerConfig(
             max_num_seqs=runner_config.max_num_seqs,
             max_num_batched_tokens=runner_config.max_batched_seq_len,
+            max_seq_len=runner_config.max_seq_len,
             eos=self.tokenizer.eos_token_id,
             num_kvcache_blocks=self.model_runner.num_kvcache_blocks,
             kvcache_block_size=runner_config.kvcache_block_size,
