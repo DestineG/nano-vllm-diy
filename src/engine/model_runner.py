@@ -283,11 +283,6 @@ class ModelRunner:
 
         for bs in reversed(self.graph_bs):
             graph = torch.cuda.CUDAGraph()
-            cu_seqlens_q[:bs + 1] = torch.arange(bs + 1, dtype=torch.int32)
-            cu_seqlens_k[:bs + 1] = torch.arange(bs + 1, dtype=torch.int32)
-            slot_mapping[:bs] = torch.arange(bs, dtype=torch.int32) * self.block_size
-            block_tables.fill_(-1)
-            block_tables[:bs, 0] = torch.arange(bs, dtype=torch.int32)
             ctx = Context(
                 is_prefill=True,
                 cu_seqlens_q=cu_seqlens_q[:bs + 1],
