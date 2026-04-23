@@ -36,13 +36,6 @@ class LLMEngine:
             model_dim=model_dim
         )
         self.max_seq_len = runner_config.max_seq_len
-        
-        runner_config.dtype = dtype
-        runner_config.max_seq_len = max_seq_len
-        runner_config.num_key_value_heads = num_key_value_heads
-        runner_config.head_dim = head_dim
-        runner_config.num_hidden_layers = num_hidden_layers
-        runner_config.model_dim = model_dim
 
         Sequence.block_size = runner_config.kvcache_block_size
         self.ps = []
