@@ -18,15 +18,24 @@ from src.engine.model_runner import ModelRunner
 class LLMEngine:
 
     def __init__(self, model_name_or_path, modelClass):
-        runner_config = RunnerConfig(model_path=model_name_or_path)
         model_config = get_model_config(model_name_or_path)
-        
         dtype = model_config.dtype if hasattr(model_config, "dtype") else torch.float16
-        max_seq_len = min(model_config.max_position_embeddings, runner_config.max_seq_len)
+        max_seq_len = model_config.max_position_embeddings
         num_key_value_heads = model_config.num_key_value_heads
         head_dim = model_config.head_dim if hasattr(model_config, "head_dim") else model_config.hidden_size // model_config.num_key_value_heads
         num_hidden_layers = model_config.num_hidden_layers
         model_dim = model_config.hidden_size
+
+        runner_config = RunnerConfig(
+            model_path=model_name_or_path,
+            dtype=dtype,
+            max_seq_len=max_seq_len,
+            num_key_value_heads=num_key_value_heads,
+            head_dim=head_dim,
+            num_hidden_layers=num_hidden_layers,
+            model_dim=model_dim
+        )
+        self.max_seq_len = runner_config.max_seq_len
         
         runner_config.dtype = dtype
         runner_config.max_seq_len = max_seq_len
@@ -68,6 +77,37 @@ class LLMEngine:
     def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
+        prompt_len = len(prompt)
+        max_new_tokens = sampling_params.max_tokens
+        block_size = self.scheduler.block_manager.block_size
+        total_num_blocks = self.scheduler.block_manager.num_blocks
+        
+        # 检查 Prompt 是否超过了物理 KV Cache 的承载能力
+        needed_prompt_blocks = (prompt_len + block_size - 1) // block_size
+        if needed_prompt_blocks > total_num_blocks:
+            raise ValueError(
+                f"Prompt is too long ({prompt_len} tokens). "
+                f"It requires {needed_prompt_blocks} blocks, but the system only has {total_num_blocks} blocks. "
+                f"Please reduce the prompt length or increase num_kvcache_blocks."
+            )
+
+        # 检查 Prompt + 生成长度 是否超过了系统总容量
+        total_expected_tokens = prompt_len + max_new_tokens
+        needed_total_blocks = (total_expected_tokens + block_size - 1) // block_size
+        if needed_total_blocks > total_num_blocks:
+            raise ValueError(
+                f"The request (prompt {prompt_len} + max_tokens {max_new_tokens}) exceeds system capacity. "
+                f"Required blocks: {needed_total_blocks}, Available blocks: {total_num_blocks}. "
+                f"Try reducing sampling_params.max_tokens."
+            )
+
+        # 模型支持的最大长度
+        if total_expected_tokens > self.max_seq_len:
+             raise ValueError(
+                f"Requested total length {total_expected_tokens} exceeds the model's "
+                f"maximum sequence length configuration ({self.max_seq_len})."
+            )
+
         seq = Sequence(prompt, sampling_params)
         self.scheduler.add_sequence(seq)
 

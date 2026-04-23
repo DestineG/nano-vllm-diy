@@ -37,7 +37,7 @@ class ModelRunner:
         self.sampler = Sampler()
         self.warmup_model(
             max_batched_seq_len=runner_cfg.max_batched_seq_len,
-            max_seq_len=min(runner_cfg.max_seq_len, runner_cfg.max_seq_len),
+            max_seq_len=runner_cfg.max_seq_len,
             max_num_seqs=runner_cfg.max_num_seqs
         )
         self.num_kvcache_blocks = self.allocate_kv_cache(

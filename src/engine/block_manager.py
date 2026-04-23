@@ -50,7 +50,9 @@ class BlockManager:
         num_blocks: int,
         block_size: int
     ):
+        self.num_blocks = num_blocks
         self.block_size = block_size
+
         self.blocks = [Block(i) for i in range(num_blocks)]
         self.hash_to_block_id = {}
         self.free_block_ids = deque(range(num_blocks))
