@@ -138,6 +138,8 @@ class LLMEngine:
                 "Decode": f"{int(decode_throughput)}tok/s",
             })
             for seq_id, token_ids in output:
+                if token_ids and token_ids[-1] == self.tokenizer.eos_token_id:
+                    token_ids = token_ids[:-1]
                 outputs[seq_id] = token_ids
                 pbar.update(1)
         pbar.close()
