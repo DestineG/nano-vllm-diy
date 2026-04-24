@@ -61,6 +61,7 @@ class LLMEngine:
         atexit.register(self.exit)
 
     def exit(self):
+        print("Exiting, num_free_blocks:", self.scheduler.block_manager.get_num_free_block())
         self.model_runner.call("exit")
         del self.model_runner
         for p in self.ps:

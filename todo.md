@@ -2,4 +2,4 @@
 - prefill/decode 的公平策略
 - config 优化
 - 探究 graph replay 效率如此高的原因
-- 要控制 chunkprefill 的数量，否则在在 seq 数量较多的情况下会导致 block 不足，无法进行调度
+- 要控制 chunkprefill 的数量，否则在在 seq 数量较多的情况下会导致 block 不足，无法进行调度(考虑更合适的调度策略而不是像 `schedule()` 中简单的兜底策略)
