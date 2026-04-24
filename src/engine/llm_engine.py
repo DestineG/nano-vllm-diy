@@ -1,5 +1,4 @@
 import atexit
-from dataclasses import fields
 from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer

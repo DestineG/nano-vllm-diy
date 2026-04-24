@@ -69,11 +69,13 @@ class ModelRunner:
                 self.loop()
 
     def exit(self):
+        print(f"RANK {self.rank} exiting...")
         if self.world_size > 1:
             self.shm.close()
-            # dist.barrier()
+            dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
+        print(f"RANK {self.rank} released shared memory.")
         if not self.enforce_eager:
             graphs = getattr(self, "graphs", None)
             graph_pool = getattr(self, "graph_pool", None)
@@ -81,6 +83,7 @@ class ModelRunner:
                 del self.graphs
             if graph_pool is not None:
                 del self.graph_pool
+        print(f"RANK {self.rank} released CUDA graphs.")
         torch.cuda.synchronize()
         if dist.is_initialized():
             dist.destroy_process_group()
