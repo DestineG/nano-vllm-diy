@@ -60,11 +60,12 @@ class Scheduler:
 
             # 计算 seq 本次调度的 token 数量
             _, call_back = self.block_manager.compute_num_prefix_cache_block(seq)
-            call_back(allow_append=True)    # 更新 seq 的 prefixcache 以及 blockmanager 的 used/free list
+            undo_call_back = call_back(allow_append=True)    # 先试探性更新 prefixcache，若本轮未调度该序列则回滚
             num_free_block = self.block_manager.get_num_free_block()
 
             remaining_tokens = self.max_num_batched_tokens - prefill_num_batched_tokens - decode_num_batched_tokens
             if remaining_tokens <= 0:
+                undo_call_back()
                 break
             max_num_available_token = len(seq) - seq.num_cached_tokens
             if max_num_available_token <= 0:    # 该序列的所有 token 都已缓存，直接进入 decode 阶段，重算最后一个 token
@@ -77,6 +78,7 @@ class Scheduler:
             num_remaining_block_table_token = len(seq.block_table) * self.block_manager.block_size - seq.num_cached_tokens
             num_oom_limit = num_free_block * self.block_manager.block_size + num_remaining_block_table_token
             if num_oom_limit <= 0:    # 没有可用的 block 了，无法调度该序列
+                undo_call_back()
                 break
 
             is_chunked_prefill = max_num_available_token > min(num_token_limit, num_oom_limit)
@@ -86,6 +88,7 @@ class Scheduler:
                     num_chunk_prefill += 1
                     log_count(chunk_prefill=1)
                 else:
+                    undo_call_back()
                     break
             else:
                 num_scheduled_tokens = max_num_available_token
@@ -100,7 +103,23 @@ class Scheduler:
             prefill_num_batched_tokens += num_scheduled_tokens
             scheduled_seqs.append(self.prefill.popleft())
         
-        assert scheduled_seqs, "At least one sequence should be scheduled in each step to make progress"
+        # TODO: When queued sequences exceed KV-cache carrying capacity, this assertion may fire.
+        #       Optimize admission/scheduling above (e.g., better prefill selection/backpressure) to avoid dead steps.
+        # assert scheduled_seqs, "At least one sequence should be scheduled in each step to make progress"
+        if not scheduled_seqs:
+            target_idx = -1
+            for i, seq in enumerate(self.prefill):
+                if seq.num_cached_tokens != 0:
+                    target_idx = i
+                    break
+            assert target_idx != -1, "No sequence can be scheduled, but there exists a sequence that has cached tokens, which can be scheduled at least for decoding"
+            self.prefill.rotate(-target_idx)  # 将目标移动到队首
+            victim_seq = self.prefill.popleft() # 弹出目标
+            self.prefill.rotate(target_idx)   # 将剩下的队列转回原位
+
+            self.block_manager.deallocate(victim_seq)
+            self.prefill.append(victim_seq)
+            return self.schedule()   # 重新调度
         return scheduled_seqs, prefill_num_batched_tokens, decode_num_batched_tokens
 
     def postprocess(
@@ -118,11 +137,14 @@ class Scheduler:
             seq.num_scheduled_tokens = 0
             seq.append(token_id)
 
-            if (seq.status == SequenceStatus.PREFILL
-                and seq.num_cached_tokens == seq.num_tokens - 1
-            ):
-                seq.status = SequenceStatus.DECODE
-                self.decode.append(seq)
+            if seq.status == SequenceStatus.PREFILL:
+                if seq.num_cached_tokens == seq.num_tokens - 1:
+                    seq.status = SequenceStatus.DECODE
+                    self.decode.append(seq)
+                elif seq.num_cached_tokens < seq.num_tokens - 1:
+                    self.prefill.appendleft(seq)
+                else:
+                    raise ValueError("num_cached_tokens should not exceed num_tokens - 1 in PREFILL status")
 
             if (not seq.ignore_eos and token_id == self.eos) or seq.num_generated_token_ids == seq.max_tokens:
                 seq.status = SequenceStatus.FINISHED

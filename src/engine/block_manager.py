@@ -101,6 +101,7 @@ class BlockManager:
         1. 该函数本身是只读的，不会修改 seq 状态或任何全局引用计数
         2. 它不依赖 block_table 的当前长度，仅基于 token_ids 的 Hash 进行匹配
         3. 返回一个元组 (total_hits, update_fn)。调用 update_fn() 才会真正应用物理块的替换/追加
+        4. update_fn 会返回 undo_fn；若本轮调度未提交该序列，可调用 undo_fn 回滚 update_fn 的副作用
         """
         start_block = seq.num_cached_tokens // self.block_size
 
@@ -127,6 +128,8 @@ class BlockManager:
         log_count(prefix_cache=len(new_hitted_ids))
 
         def update_prefix_cache_block(allow_append=False):
+            prev_cached_tokens = seq.num_cached_tokens
+            undo_records = []
             for idx, new_id in enumerate(new_hitted_ids):
                 table_idx = start_block + idx
                 
@@ -134,20 +137,46 @@ class BlockManager:
                     old_id = seq.block_table[table_idx]
                     if old_id != new_id:
                         self._free_block(old_id)
+                        old_became_free = old_id in self.free_block_ids
                         self.blocks[new_id].add_ref()
+                        new_was_free = new_id in self.free_block_ids
                         seq.block_table[table_idx] = new_id
-                        if new_id in self.free_block_ids:
+                        if new_was_free:
                             self.free_block_ids.remove(new_id)
                             self.used_block_ids.add(new_id)
+                        undo_records.append(("replace", table_idx, old_id, new_id, old_became_free, new_was_free))
                 elif allow_append:
                     self.blocks[new_id].add_ref()
+                    new_was_free = new_id in self.free_block_ids
                     seq.block_table.append(new_id)
-                    if new_id in self.free_block_ids:
+                    if new_was_free:
                         self.free_block_ids.remove(new_id)
                         self.used_block_ids.add(new_id)
+                    undo_records.append(("append", new_id, new_was_free))
                 else:
                     raise ValueError("Cannot append hit block without allow_append=True")
             seq.num_cached_tokens = total_hits * self.block_size
+            
+            def undo_prefix_cache_block_update():
+                # TODO: Current approach mutates global state and rolls it back on failed scheduling.
+                #       Consider migrating to a virtual-state planning path to avoid apply+undo churn.
+                for record in reversed(undo_records):
+                    if record[0] == "replace":
+                        _, table_idx, old_id, new_id, old_became_free, _ = record
+                        seq.block_table[table_idx] = old_id
+                        self._free_block(new_id)
+                        self.blocks[old_id].add_ref()
+                        if old_became_free:
+                            self.free_block_ids.remove(old_id)
+                            self.used_block_ids.add(old_id)
+                    else:
+                        _, new_id, _ = record
+                        assert seq.block_table and seq.block_table[-1] == new_id
+                        seq.block_table.pop()
+                        self._free_block(new_id)
+                seq.num_cached_tokens = prev_cached_tokens
+
+            return undo_prefix_cache_block_update
 
         return total_hits, update_prefix_cache_block
 

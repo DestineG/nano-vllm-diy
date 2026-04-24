@@ -9,7 +9,7 @@ from src.utils.log import reset_log_count, print_log_count
 
 def main():
     seed(0)
-    num_seqs = 256
+    num_seqs = 2048
     max_input_len = 1024
     max_ouput_len = 1024
 

@@ -69,6 +69,7 @@ class ModelRunner:
                 self.loop()
 
     def exit(self):
+        print(f"RANK {self.rank} num_blocks={self.num_kvcache_blocks} exiting...")
         print(f"RANK {self.rank} exiting...")
         if self.world_size > 1:
             self.shm.close()
