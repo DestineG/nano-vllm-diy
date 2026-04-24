@@ -32,7 +32,7 @@ class ModelRunner:
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(runner_cfg.dtype)
         torch.set_default_device("cuda")
-        self.model = modelClass(model_cfg)
+        self.model = modelClass(model_cfg, tp=(rank, self.world_size))
         self.model.load(runner_cfg.model_path)
         self.sampler = Sampler()
         self.warmup_model(
@@ -71,7 +71,7 @@ class ModelRunner:
     def exit(self):
         if self.world_size > 1:
             self.shm.close()
-            dist.barrier()
+            # dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
         if not self.enforce_eager:

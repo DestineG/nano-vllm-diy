@@ -9,7 +9,7 @@ class RunnerConfig:
     _max_seq_len: int = 8192
     chunked_prefill_size: int = 512
 
-    tensor_parallel_size: int = 1
+    tensor_parallel_size: int = 2
     enforce_eager: bool = False
 
     gpu_memory_utilization: float = 0.9
