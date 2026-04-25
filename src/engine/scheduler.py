@@ -103,9 +103,12 @@ class Scheduler:
             prefill_num_batched_tokens += num_scheduled_tokens
             scheduled_seqs.append(self.prefill.popleft())
         
-        # TODO: When queued sequences exceed KV-cache carrying capacity, this assertion may fire.
-        #       Optimize admission/scheduling above (e.g., better prefill selection/backpressure) to avoid dead steps.
-        # assert scheduled_seqs, "At least one sequence should be scheduled in each step to make progress"
+        # TODO:
+        # 当进入 if 分支时，说明decode队列在调度时没有 seq，或者只有一个 seq 却需要一个 block 但是 block 已经被占满
+        # 那么就只有 prefill 队列中的 持有 cache 的 seq 在占用 block，如果此时还有 free block 那么至少会有一个 seq 可以被调度
+        # 执行到这里说明 free block 已经被占满，也就是 block 被 chunkprefill 占满导致无法调度 seq，现在使用兜底策略：将 prefill 队列中最早的一个持有 cache 的 seq 弹出并放到 decode 队列末尾，重新调度
+        # 更合适的策略是设计更合理的调度策略控制整个系统中 chunk prefill 的 seq 数量
+        # 还有一个问题是 chunkprefill 占用 block 过多时可能会导致每次调度的 seq 吃不满计算资源，导致系统整体效率降低，这时也需要设计更合理的调度策略来控制 chunk prefill 的 seq 数量
         if not scheduled_seqs:
             target_idx = -1
             for i, seq in enumerate(self.prefill):
