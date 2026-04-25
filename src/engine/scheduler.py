@@ -108,7 +108,7 @@ class Scheduler:
         # 那么就只有 prefill 队列中的 持有 cache 的 seq 在占用 block，如果此时还有 free block 那么至少会有一个 seq 可以被调度
         # 执行到这里说明 free block 已经被占满，也就是 block 被 chunkprefill 占满导致无法调度 seq，现在使用兜底策略：将 prefill 队列中最早的一个持有 cache 的 seq 弹出并放到 decode 队列末尾，重新调度
         # 更合适的策略是设计更合理的调度策略控制整个系统中 chunk prefill 的 seq 数量
-        # 还有一个问题是 chunkprefill 占用 block 过多时可能会导致每次调度的 seq 吃不满计算资源，导致系统整体效率降低，这时也需要设计更合理的调度策略来控制 chunk prefill 的 seq 数量
+        # 还有一个问题是 chunkprefill 占用 block 过多时可能会导致每次调度时可用的 free block 数量较少，导致本次调度的 num_batched_tokens 较少吃不满计算资源，进而导致调度效率较低
         if not scheduled_seqs:
             target_idx = -1
             for i, seq in enumerate(self.prefill):
