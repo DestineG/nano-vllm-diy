@@ -16,14 +16,15 @@ class Scheduler:
             num_blocks=config.num_kvcache_blocks,
             block_size=config.kvcache_block_size
         )
+        self.waitting: deque[Sequence] = deque()
         self.prefill: deque[Sequence] = deque()
         self.decode: deque[Sequence] = deque()
     
     def is_finished(self):
-        return len(self.prefill) == 0 and len(self.decode) == 0
+        return len(self.waitting) == 0 and len(self.prefill) == 0 and len(self.decode) == 0
     
     def add_sequence(self, seq: Sequence):
-        self.prefill.append(seq)
+        self.waitting.append(seq)
     
     def back_to_prefill(self, seq: Sequence):
         assert seq.status == SequenceStatus.DECODE, "Only sequences in DECODE status can be moved back to PREFILL"
@@ -32,6 +33,11 @@ class Scheduler:
         self.prefill.appendleft(seq)
     
     def schedule(self):
+        # TODO: 每轮调度硬算当前 len(self.prefill) + len(self.decode)，可以在后处理函数中维护一个计数器，实时记录当前 prefill 和 decode 队列中的序列总数，调度函数直接读取这个计数器的值来判断是否可以将 waitting 中的序列加入到 prefill 中
+        while self.waitting and len(self.prefill) + len(self.decode) < 128:
+            seq = self.waitting.popleft()
+            seq.status = SequenceStatus.PREFILL
+            self.prefill.append(seq)
         scheduled_seqs = []
         prefill_num_batched_tokens = 0
         decode_num_batched_tokens = 0
